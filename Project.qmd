@@ -1,0 +1,503 @@
+---
+title: "Data Science Project"
+format: docx
+editor: visual
+author: "Kritika Goyal"
+---
+
+## Introduction
+
+This project presents an in-depth analysis of National Stock Number (NSN) data, focusing on exploring pricing patterns across various representative offices. NSN data is crucial in the management and procurement of products across different sectors, and understanding pricing dynamics is essential for optimizing procurement strategies, reducing costs, and ensuring competitiveness. The primary objective of this analysis is to determine whether there are significant differences in average prices among different representative offices and, if so, what factors might contribute to these differences.
+
+#### Data Overview
+
+The dataset includes the following key variables:
+
+-   **NSN:** The National Stock Number identifying each item.
+
+-   **RepOffice:** The representative office responsible for the item.
+
+-   **Common Name:** A general name or description of the item.
+
+-   **Description:** A detailed description of the item.
+
+-   **Price:** The price of the item.
+
+The dataset contains 12,454 rows and 7 columns after cleaning and processing. The cleaning process involved handling missing values and ensuring that the price column was numeric.
+
+```{r}
+library(tidyverse)
+library(readr)
+library(tm)
+library(caret)
+library(arules)
+library(wordcloud)
+library(textstem)
+library(forecast)
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(dplyr)
+library(DT)  
+```
+
+```{r}
+nsn_data <- read_csv("nsn-extract-2-21-23.csv") %>%
+  mutate(Description = as.character(Description)) %>%
+  drop_na() %>%
+  mutate(
+    Price = as.numeric(Price),
+    NSN = as.factor(NSN),
+    RepOffice = as.factor(rep_office)
+  )
+
+library(dplyr)
+
+# Summary statistics for the Price variable
+summary_stats <- nsn_data %>%
+  summarise(
+    Mean_Price = mean(Price, na.rm = TRUE),
+    Median_Price = median(Price, na.rm = TRUE),
+    Std_Dev_Price = sd(Price, na.rm = TRUE),
+    Min_Price = min(Price, na.rm = TRUE),
+    Max_Price = max(Price, na.rm = TRUE)
+  )
+
+# Print the summary statistics
+print(summary_stats)
+```
+
+## Exploratory Data Analysis
+
+### Summary Statistics
+
+To understand the distribution of prices across the dataset, we calculated the following summary statistics:
+
+-   **Mean Price:** \$488.19
+
+-   **Median Price:** \$39.10
+
+-   **Standard Deviation:** \$3,564.23
+
+-   **Minimum Price:** \$0.09
+
+-   **Maximum Price:** \$160,169.10
+
+These statistics reveal that while the mean price is \$488.19, the median price is much lower at \$39.10. This suggests a right-skewed distribution, where a few items with very high prices are pulling the mean up. The large standard deviation of \$3,564.23 also indicates significant variability in prices, likely due to the wide range of products included in the dataset. The minimum and maximum prices further emphasize this variability, ranging from as low as \$0.09 to as high as \$160,169.10.
+
+### Pricing Analysis by Representative Office
+
+We then explored the average price by representative office to identify any notable differences:
+
+| Representative Office                 | Average Price |
+|---------------------------------------|---------------|
+| Office Furniture                      | \$1,076       |
+| Furniture Systems Management          | \$929         |
+| General Products                      | \$727         |
+| Office Supplies & Paper Special Order | \$580         |
+| Household and Industrial              | \$161         |
+| Hardware                              | \$85          |
+
+These variations in average prices suggest that different representative offices may be dealing with different categories of products or employing different pricing strategies. To visualize this, a bar chart was generated:
+
+The chart clearly shows that Office Furniture and Furniture Systems Management have the highest average prices, while Hardware has the lowest.
+
+```{r}
+pricing_analysis <- nsn_data %>%
+  group_by(RepOffice) %>%
+  summarise(AveragePrice = mean(Price, na.rm = TRUE), .groups = 'drop')
+
+print(pricing_analysis)
+
+ggplot(pricing_analysis, aes(x = reorder(RepOffice, -AveragePrice), y = AveragePrice)) + 
+  geom_bar(stat = "identity", fill = "blue") + 
+  theme_classic() + 
+  labs(title = "Average Price by Representative Office", x = "Representative Office", y = "Average Price") +
+  theme(axis.text.x = element_text(size = 12),  # Increase x-axis text size
+        axis.text.y = element_text(size = 12),  # Increase y-axis text size
+        axis.title.x = element_text(size = 14),  # Increase x-axis title size
+        axis.title.y = element_text(size = 14))  # Increase y-axis title size
+
+```
+
+### Text Analytics on Product Descriptions
+
+To better understand the types of products and their key features, we applied text analytics, using a word cloud to visualize the most frequent terms in product descriptions. This analysis identified:
+
+-   **Key Features:** Durability, size, material type (e.g., metal, plastic), and compatibility were commonly highlighted.
+
+These findings suggest that the dataset focuses on office-related items, with an emphasis on quality and functionality, providing valuable insights for informed procurement decisions.
+
+```{r}
+corpus <- Corpus(VectorSource(nsn_data$Description))
+corpus_clean <- tm_map(corpus, content_transformer(tolower))
+corpus_clean <- tm_map(corpus_clean, removePunctuation)
+corpus_clean <- tm_map(corpus_clean, removeNumbers)
+corpus_clean <- tm_map(corpus_clean, stripWhitespace)
+corpus_clean <- tm_map(corpus_clean, removeWords, stopwords("en"))
+corpus_clean <- tm_map(corpus_clean, stemDocument)
+
+dtm <- DocumentTermMatrix(corpus_clean)
+mat <- as.matrix(dtm)
+term_frequency <- colSums(mat)
+term_frequency_sorted <- sort(term_frequency, decreasing = TRUE)
+
+wordcloud(names(term_frequency_sorted), term_frequency_sorted, max.words = 200)
+
+```
+
+### Hypothesis Testing
+
+Based on the exploratory analysis, the scientific question—whether there are significant differences in average prices across different representative offices—can be formally translated into the following statistical hypotheses:
+
+-   **Null Hypothesis (H₀):** There is no significant difference in the average prices across different representative offices.
+
+-   **Alternative Hypothesis (H₁):** There is a significant difference in the average prices across different representative offices.
+
+These hypotheses will be tested using an Analysis of Variance (ANOVA), which is suitable for comparing the means across multiple groups.
+
+#### Checking Assumptions for ANOVA
+
+Before conducting the ANOVA, it is essential to check the assumptions of normality and homogeneity of variances:
+
+-   **Normality Check:** A QQ plot of the price data was created to assess whether the data is approximately normally distributed. While there were some deviations, particularly in the tails, the data was close enough to normality to proceed with the ANOVA.
+
+```{=html}
+<!-- -->
+```
+-   **Homogeneity of Variance Check:** The variance of prices across different representative offices was calculated and compared. Although there were differences in variances, the ANOVA is robust to moderate violations of this assumption, so we proceeded with the analysis.
+
+```{r}
+
+
+# Checking normality
+ggplot(nsn_data, aes(sample = Price)) + 
+  stat_qq() + 
+  stat_qq_line()
+
+library(dplyr)
+
+# Checking variance across different RepOffice categories
+variance_by_repoffice <- nsn_data %>%
+  group_by(RepOffice) %>%
+  summarise(variance = var(Price, na.rm = TRUE))  # Adding na.rm = TRUE to handle missing values
+
+print(variance_by_repoffice)
+```
+
+#### ANOVA Results
+
+The ANOVA was conducted to test the null hypothesis. The results are summarized in the following table:
+
+| Source    | Df    | Sum Sq    | Mean Sq   | F value | Pr(\>F)       |
+|-----------|-------|-----------|-----------|---------|---------------|
+| RepOffice | 5     | 1.377e+09 | 275424196 | 21.86   | \< 2e-16 \*\* |
+| Residuals | 12448 | 1.568e+11 | 12598170  |         |               |
+
+The p-value is significantly less than 0.05, indicating that we reject the null hypothesis. This means there is strong evidence to suggest that the average prices do differ significantly across the representative offices.
+
+```{r}
+anova_result <- aov(Price ~ RepOffice, data = nsn_data)
+summary(anova_result)
+
+
+```
+
+## Predictive Modeling
+
+### PCA & Regression Analysis
+
+#### Principal Component Analysis (PCA)
+
+Given the multicollinearity in the data, we performed a Principal Component Analysis (PCA) to reduce the dimensionality of the dataset before performing regression. The first few principal components explained a significant portion of the variance:
+
+-   **PC1:** 25.05%
+
+-   **PC2:** 22.46%
+
+-   **PC3:** 19.15%
+
+-   **PC4:** 16.67%
+
+-   **PC5:** 16.67%
+
+A scree plot was created to visualize the variance explained by each principal component:
+
+```{r}
+# Ensure columns used in PCA are numeric and do not include the response variable directly
+nsn_data$rep_office <- as.factor(nsn_data$rep_office)
+nsn_data$common_name <- as.factor(nsn_data$common_name)
+
+# Creating dummy variables 
+dummies_rep_office <- model.matrix(~ rep_office - 1, data = nsn_data)
+dummies_common_name <- model.matrix(~ common_name - 1, data = nsn_data)
+
+model_data <- cbind(nsn_data[, c("Price", "UI", "AAC")], dummies_rep_office)
+model_data <- data.frame(lapply(model_data, function(x) if(is.factor(x)) as.numeric(as.character(x)) else x))
+
+# Normalizing Data
+model_data$Price <- scale(model_data$Price)
+normalized_data <- scale(model_data[, -c(1:3)])
+
+# Principal Component Analysis
+pca_result <- prcomp(normalized_data, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+# Plotting Scree plot 
+scree_plot <- function(pca) {
+  var_explained <- pca$sdev^2 / sum(pca$sdev^2)
+  plot(var_explained, xlab = "Principal Component", ylab = "Proportion of Variance Explained", type = 'b',
+       main = "Scree Plot")
+  abline(h = 0.01, col = "red", lty = 2)  # A threshold line at 1% variance explained
+}
+scree_plot(pca_result)
+
+important_components <- pca_result$x[, pca_result$sdev^2 / sum(pca_result$sdev^2) > 0.01]
+
+# Split data for training and testing
+set.seed(123)
+train_indices <- sample(1:nrow(important_components), size = 0.7 * nrow(important_components))
+train_data <- important_components[train_indices, ]
+test_data <- important_components[-train_indices, ]
+train_labels <- model_data$Price[train_indices]
+test_labels <- model_data$Price[-train_indices]
+
+# Ensure train and test data are data frames for regression
+train_data <- data.frame(train_data)
+test_data <- data.frame(test_data)
+
+# Regression Model
+linear_model <- lm(train_labels ~ ., data = train_data)
+summary(linear_model)
+
+# Predict on the test data
+predictions <- predict(linear_model, newdata = test_data)
+
+# Mean Squared Error on the test set
+mse <- mean((predictions - test_labels)^2)
+print(paste("Mean Squared Error on Test Set:", mse))
+
+```
+
+#### Regression Analysis
+
+We then conducted a regression analysis using the principal components as predictors to model the prices. The model showed that PC1, PC2, and PC3 were significant predictors of price, with the following results:
+
+-   **Multiple R-squared:** 0.01027
+
+-   **Adjusted R-squared:** 0.009699
+
+-   **F-statistic:** 18.07 on 5 and 8711 degrees of freedom, p-value \< 2.2e-16
+
+The low R-squared value suggests that while some components are significant, the model does not explain much of the variability in prices.
+
+```{r}
+set.seed(123)
+train_indices <- sample(1:nrow(important_components), size = 0.7 * nrow(important_components))
+train_data <- important_components[train_indices, ]
+test_data <- important_components[-train_indices, ]
+train_labels <- model_data$Price[train_indices]
+test_labels <- model_data$Price[-train_indices]
+
+# Ensure train and test data are data frames for regression
+train_data <- data.frame(train_data)
+test_data <- data.frame(test_data)
+
+# Regression Model
+linear_model <- lm(train_labels ~ ., data = train_data)
+summary(linear_model)
+
+# Predict on the test data
+predictions <- predict(linear_model, newdata = test_data)
+
+# Mean Squared Error on the test set
+mse <- mean((predictions - test_labels)^2)
+print(paste("Mean Squared Error on Test Set:", mse))
+```
+
+#### Random Forest Analysis
+
+To improve predictive performance, we applied a Random Forest model, which is better suited for capturing complex relationships in the data. The Random Forest model was trained on 70% of the data and tested on the remaining 30%. The Mean Squared Error (MSE) on the test set was 1.4228, slightly lower than the PCA regression model, indicating better predictive accuracy.
+
+```{r}
+# Load necessary library
+library(randomForest)
+
+# Prepare your data (using the already split train and test data)
+train_data <- train_data  # Assuming train_data is your training set with features
+train_labels <- train_labels  # Assuming train_labels is your response variable
+
+# Combine features and labels for training
+train_data_combined <- cbind(train_labels, train_data)
+
+# Fit Random Forest model without formula
+set.seed(123)
+rf_model <- randomForest(x = train_data, y = train_labels, ntree = 500, mtry = 3, importance = TRUE)
+
+# Predict on the test set
+rf_predictions <- predict(rf_model, newdata = test_data)
+
+# Calculate Mean Squared Error (MSE)
+rf_mse <- mean((rf_predictions - test_labels)^2)
+print(paste("Random Forest MSE on Test Set:", rf_mse))
+
+varImpPlot(rf_model)
+
+```
+
+## Shiny App
+
+To allow for interactive exploration of the data and analysis results, we developed a Shiny application. The application includes several features:
+
+-   **Data Overview:** A table displaying the NSN data.
+
+-   **Pricing Analysis:** A bar chart and table summarizing average prices by representative office.
+
+-   **Word Cloud:** A visualization of the most frequent words in product descriptions.
+
+-   **Hypothesis Testing:** Results of the ANOVA and variance checks, including QQ plots.
+
+-   **PCA & Regression Analysis:** Scree plot and regression summary.
+
+-   **Random Forest Analysis:** Variable importance plot and MSE on the test set.
+
+```{r}
+# Load necessary libraries
+library(shiny)
+library(shinydashboard)
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(wordcloud)
+library(forecast)
+library(DT)
+
+ui <- dashboardPage(
+  dashboardHeader(title = "NSN Data Analysis"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Data Overview", tabName = "overview", icon = icon("dashboard")),
+      menuItem("Pricing Analysis", tabName = "pricing", icon = icon("dollar-sign")),
+      menuItem("Frequency of Keywords in Description", tabName = "wordcloud", icon = icon("cloud")),
+      menuItem("Hypothesis Testing", tabName = "hypothesis_testing", icon = icon("balance-scale")),
+      menuItem("PCA & Regression", tabName = "pca_regression", icon = icon("project-diagram")),
+      menuItem("Random Forest ", tabName = "random_forest", icon = icon("tree"))
+    )
+  ),
+  dashboardBody(
+    tabItems(
+      tabItem(tabName = "overview", h2("Data Summary"), DT::dataTableOutput("dataSummary")),
+      tabItem(tabName = "pricing", h2("Pricing Analysis"), 
+              plotOutput("pricePlot"),
+              DT::dataTableOutput("pricingTable")),
+      tabItem(tabName = "wordcloud", h2("Frequency of Keywords in Description"), plotOutput("wordCloudPlot")),
+      tabItem(tabName = "hypothesis_testing", h2("Hypothesis Testing Results"),
+              verbatimTextOutput("hypothesisText"),
+              plotOutput("qqPlot"), 
+              verbatimTextOutput("varianceOutput"),
+              verbatimTextOutput("anovaOutput")),
+      tabItem(tabName = "pca_regression", h2("PCA and Regression Analysis"),
+              plotOutput("screePlot"), 
+              verbatimTextOutput("regressionSummary"),
+              verbatimTextOutput("pcaMSE")),
+      tabItem(tabName = "random_forest", h2("Random Forest"),
+              plotOutput("varImpPlot"),
+              verbatimTextOutput("randomForestMSE"))
+    )
+  )
+)
+
+
+server <- function(input, output) {
+  
+  output$dataSummary <- DT::renderDataTable({
+    DT::datatable(nsn_data)
+  })
+  
+  #pricing analysis
+  output$pricePlot <- renderPlot({
+    ggplot(pricing_analysis, aes(x = RepOffice, y = AveragePrice)) +
+      geom_bar(stat = "identity", fill = "blue") +
+      theme_classic() +
+      labs(title = "Average Price by Representative Office", x = "Representative Office", y = "Average Price")
+  })
+  
+  #pricing table
+  output$pricingTable <- DT::renderDataTable({
+    DT::datatable(pricing_analysis, options = list(pageLength = 5, autoWidth = TRUE))
+  })
+  
+  # word cloud plot
+  output$wordCloudPlot <- renderPlot({
+    wordcloud(names(term_frequency_sorted), term_frequency_sorted, max.words = 100)
+  })
+  
+  #hypotheses text
+  output$hypothesisText <- renderText({
+    paste(
+      "Null Hypothesis (H0): There is no difference in the average prices across different representative offices.\n",
+      "Alternative Hypothesis (H1): There is a difference in the average prices across different representative offices."
+    )
+  })
+  
+  # QQ plot for normality check
+  output$qqPlot <- renderPlot({
+    ggplot(nsn_data, aes(sample = Price)) + 
+      stat_qq() + 
+      stat_qq_line() +
+      theme_minimal() +
+      labs(title = "QQ Plot for Price", x = "Theoretical Quantiles", y = "Sample Quantiles")
+  })
+  
+  #variance output
+  output$varianceOutput <- renderPrint({
+    variance_by_repoffice <- nsn_data %>%
+      group_by(RepOffice) %>%
+      summarise(variance = var(Price, na.rm = TRUE))
+    print(variance_by_repoffice)
+  })
+  
+  # ANOVA output
+  output$anovaOutput <- renderPrint({
+    anova_result <- aov(Price ~ RepOffice, data = nsn_data)
+    summary(anova_result)
+  })
+  
+  # scree plot
+  output$screePlot <- renderPlot({
+    scree_plot(pca_result)
+  })
+  
+  # regression summary
+  output$regressionSummary <- renderPrint({
+    summary(linear_model)
+  })
+  
+  # MSE for PCA and regression
+  output$pcaMSE <- renderPrint({
+    paste("Mean Squared Error on Test Set for PCA Regression:", mse)
+  })
+  
+  #  Random Forest variable importance plot
+  output$varImpPlot <- renderPlot({
+    varImpPlot(rf_model)
+  })
+  
+  # Random Forest MSE
+  output$randomForestMSE <- renderPrint({
+    paste("Random Forest MSE on Test Set:", rf_mse)
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+### Conclusion
+
+This project effectively uncovered significant disparities in average prices across different representative offices, indicating potential variations in product types or pricing strategies. Through a comprehensive approach that included exploratory data analysis, ANOVA, PCA, regression, and Random Forest modeling, we gained valuable insights into the factors driving these price differences. The analysis revealed that specific offices may cater to distinct market segments or employ unique pricing strategies, contributing to the observed variability.
+
+The development of the Shiny application enhances the utility of this analysis, offering an interactive tool for stakeholders to explore the data further and make informed decisions. This tool allows for real-time data exploration, enabling users to delve into specific aspects of the data that may warrant further investigation.
+
+Looking forward, more detailed analyses could focus on pinpointing the exact factors driving price variations, such as product characteristics, market demand, or regional differences. Additionally, exploring advanced machine learning models could improve the predictive accuracy of pricing trends, providing even deeper insights and more robust decision-making tools for pricing strategy optimization.
